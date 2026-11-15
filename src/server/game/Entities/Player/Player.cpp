@@ -2738,9 +2738,6 @@ void Player::SetInWater(bool apply)
     /// @todo exist also swimming mobs, and function must be symmetric to enter/leave water
     m_isInWater = apply;
 
-    // remove auras that need water/land
-    RemoveAurasWithInterruptFlags(apply ? AURA_INTERRUPT_FLAG_NOT_ABOVEWATER : AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
-
     GetThreatManager().EvaluateSuppressed(true);
 }
 
@@ -7974,6 +7971,23 @@ void Player::UpdateArea(uint32 newArea)
     UpdatePvPState(true);
 
     UpdateAreaDependentAuras(newArea);
+    UpdateZoneDependentAuras(m_zoneUpdateId);
+
+    if (HasAura(73701))
+    {
+        bool seaLegsAllowed = false;
+        SpellAreaMapBounds seaLegsAreas = sSpellMgr->GetSpellAreaMapBounds(73701);
+        if (newArea != 5012)
+            for (SpellAreaMap::const_iterator itr = seaLegsAreas.first; itr != seaLegsAreas.second; ++itr)
+                if (itr->second.autocast && itr->second.IsFitToRequirements(this, m_zoneUpdateId, newArea))
+                {
+                    seaLegsAllowed = true;
+                    break;
+                }
+        if (!seaLegsAllowed)
+            RemoveAurasDueToSpell(73701);
+    }
+
     UpdateAreaAndZonePhase();
 
     // previously this was in UpdateZone (but after UpdateArea) so nothing will break

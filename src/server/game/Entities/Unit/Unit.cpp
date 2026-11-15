@@ -3885,20 +3885,61 @@ void Unit::ProcessPositionDataChanged(PositionFullTerrainStatus const& data)
     ProcessTerrainStatusUpdate(oldLiquidStatus, data.liquidInfo);
 }
 
-void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optional<LiquidData> const& newLiquidData)
+void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus oldLiquidStatus, Optional<LiquidData> const& newLiquidData)
 {
     if (!IsControlledByPlayer())
         return;
 
+    constexpr uint32 WATER_EXIT_AURA_REMOVAL_EVENT_GROUP = 0x57415452;
+    constexpr uint32 WATER_EXIT_AURA_REMOVAL_DELAY = 300;
+    constexpr ZLiquidStatus LIQUID_CONTACT_MASK = ZLiquidStatus(LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER | LIQUID_MAP_WATER_WALK);
+
+    bool const wasInWater = (oldLiquidStatus & (LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER)) != 0;
+    bool const isInWater = IsInWater();
+    bool const wasInLiquidContact = (oldLiquidStatus & LIQUID_CONTACT_MASK) != 0;
+    bool const isInLiquidContact = (GetLiquidStatus() & LIQUID_CONTACT_MASK) != 0;
+
     // remove appropriate auras if we are swimming/not swimming respectively
-    if (IsInWater())
+    if (isInWater)
+    {
+        m_Events.KillEventsByGroup(WATER_EXIT_AURA_REMOVAL_EVENT_GROUP);
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
-    else
-        RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
+    }
+    else if (isInLiquidContact)
+        m_Events.KillEventsByGroup(WATER_EXIT_AURA_REMOVAL_EVENT_GROUP);
+    else if (wasInLiquidContact)
+    {
+        m_Events.KillEventsByGroup(WATER_EXIT_AURA_REMOVAL_EVENT_GROUP);
+        m_Events.Schedule(WATER_EXIT_AURA_REMOVAL_DELAY, WATER_EXIT_AURA_REMOVAL_EVENT_GROUP, [this]()
+        {
+            if (!(GetLiquidStatus() & LIQUID_CONTACT_MASK))
+            {
+                uint32 exceptSpell = 0;
+                if (Player* player = ToPlayer())
+                {
+                    uint32 area = 0;
+                    uint32 zone = 0;
+                    player->GetZoneAndAreaId(zone, area);
+                    ZLiquidStatus const probeStatus = GetMap()->GetLiquidStatus(GetPhaseMask(), GetPositionX(), GetPositionY(),
+                        GetPositionZ() + 0.1f, MAP_ALL_LIQUIDS, nullptr, GetCollisionHeight());
+                    if (area != 5012 && (probeStatus & (LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER)))
+                        exceptSpell = 73701;
+                }
+                RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER, exceptSpell);
+            }
+        });
+    }
+
+    if (!wasInWater && isInWater)
+        if (Player* player = ToPlayer())
+        {
+            player->UpdateAreaDependentAuras(player->GetAreaId());
+            player->UpdateZoneDependentAuras(player->GetZoneId());
+        }
 
     // liquid aura handling
     LiquidTypeEntry const* curLiquid = nullptr;
-    if (IsInWater() && newLiquidData)
+    if (isInWater && newLiquidData)
         curLiquid = sLiquidTypeStore.LookupEntry(newLiquidData->entry);
     if (curLiquid != _lastLiquid)
     {
